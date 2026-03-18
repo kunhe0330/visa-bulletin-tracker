@@ -80,8 +80,17 @@ def estimate_arrival(history: list, priority_date: date = None) -> str:
     if len(history) < 2:
         return "데이터 부족 (최소 2개월 이력 필요)"
 
-    # Use up to last 7 entries to get 6 monthly deltas
-    recent = history[:7]  # history is newest-first
+    # Deduplicate by bulletin_month (keep newest entry per month)
+    seen_months = set()
+    unique_history = []
+    for entry in history:
+        month = entry.get("bulletin_month")
+        if month not in seen_months:
+            seen_months.add(month)
+            unique_history.append(entry)
+
+    # Use up to last 7 unique entries to get 6 monthly deltas
+    recent = unique_history[:7]  # newest-first
     recent.reverse()  # oldest-first for calculation
 
     deltas = []
@@ -93,14 +102,14 @@ def estimate_arrival(history: list, priority_date: date = None) -> str:
         old_d = _parse_stored_date(old_fa)
         new_d = _parse_stored_date(new_fa)
         if old_d and new_d:
-            deltas.append((new_d - old_d).days)
+            delta = (new_d - old_d).days
+            if delta > 0:  # only count months with actual progress
+                deltas.append(delta)
 
     if not deltas:
         return "진전 데이터 부족"
 
     avg_days_per_month = sum(deltas) / len(deltas)
-    if avg_days_per_month <= 0:
-        return "최근 진전 없음 (추정 불가)"
 
     # Get current final action date
     latest_fa = history[0].get("final_action", {}).get("eb3_professionals")

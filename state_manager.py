@@ -79,8 +79,11 @@ def update_state(bulletin_data: dict) -> tuple[dict, Optional[dict]]:
         "dates_for_filing": _serialize_dates(bulletin_data["dates_for_filing"]),
     }
 
-    # Insert at the beginning (newest first)
-    state["history"].insert(0, new_entry)
+    # Replace if same bulletin_month already exists, otherwise insert
+    if state["history"] and state["history"][0].get("bulletin_month") == new_entry["bulletin_month"]:
+        state["history"][0] = new_entry  # overwrite duplicate
+    else:
+        state["history"].insert(0, new_entry)
     state["last_checked"] = now
     state["last_bulletin_month"] = bulletin_data["bulletin_month"]
     state["last_bulletin_url"] = bulletin_data["bulletin_url"]
