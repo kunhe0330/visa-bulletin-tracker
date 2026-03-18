@@ -31,12 +31,23 @@ def health():
     })
 
 
-@app.route("/check", methods=["POST"])
+@app.route("/check", methods=["GET", "POST"])
 def manual_check():
     """Manually trigger a bulletin check."""
     try:
         result = check_bulletin(force=True)
         return jsonify({"status": "ok", "result": result})
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+
+@app.route("/seed", methods=["GET", "POST"])
+def seed_history():
+    """One-time: seed history with past 7 months of bulletins."""
+    try:
+        from seed_history import seed
+        seed()
+        return jsonify({"status": "ok", "message": "Seeded 7 months of history"})
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
 
