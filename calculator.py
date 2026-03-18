@@ -88,13 +88,12 @@ def estimate_arrival(history: list, priority_date: date = None) -> str:
     for i in range(1, len(recent)):
         old_fa = recent[i - 1].get("final_action", {}).get("eb3_professionals")
         new_fa = recent[i].get("final_action", {}).get("eb3_professionals")
-        if isinstance(old_fa, str) or isinstance(new_fa, str):
-            continue  # skip C/U entries
-        if old_fa and new_fa:
-            old_d = _parse_stored_date(old_fa)
-            new_d = _parse_stored_date(new_fa)
-            if old_d and new_d:
-                deltas.append((new_d - old_d).days)
+        if old_fa in ("C", "U") or new_fa in ("C", "U"):
+            continue
+        old_d = _parse_stored_date(old_fa)
+        new_d = _parse_stored_date(new_fa)
+        if old_d and new_d:
+            deltas.append((new_d - old_d).days)
 
     if not deltas:
         return "진전 데이터 부족"
