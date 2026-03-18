@@ -104,9 +104,9 @@ def estimate_arrival(history: list, priority_date: date = None) -> str:
 
     # Get current final action date
     latest_fa = history[0].get("final_action", {}).get("eb3_professionals")
-    if isinstance(latest_fa, str):
-        if latest_fa == "C":
-            return "이미 Current"
+    if latest_fa == "C":
+        return "이미 Current"
+    if latest_fa == "U":
         return "추정 불가 (Unavailable)"
 
     current_date = _parse_stored_date(latest_fa)
