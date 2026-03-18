@@ -31,6 +31,13 @@ def health():
     })
 
 
+@app.route("/state")
+def show_state():
+    """Debug: show full state data."""
+    state = load_state()
+    return jsonify(state)
+
+
 @app.route("/check", methods=["GET", "POST"])
 def manual_check():
     """Manually trigger a bulletin check."""
