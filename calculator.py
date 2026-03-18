@@ -102,9 +102,7 @@ def estimate_arrival(history: list, priority_date: date = None) -> str:
         old_d = _parse_stored_date(old_fa)
         new_d = _parse_stored_date(new_fa)
         if old_d and new_d:
-            delta = (new_d - old_d).days
-            if delta > 0:  # only count months with actual progress
-                deltas.append(delta)
+            deltas.append((new_d - old_d).days)
 
     if not deltas:
         return "진전 데이터 부족"
