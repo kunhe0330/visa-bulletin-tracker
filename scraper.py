@@ -39,20 +39,57 @@ def parse_bulletin_date(date_str: str) -> Optional[datetime]:
     return datetime(year, month, day).date()
 
 
+# travel.state.gov sits behind Akamai bot protection. Requests from datacenter
+# IPs with bare python-requests headers can get bounced in an endless redirect
+# loop ("exceeded 30 redirects"), so we mimic a real browser and keep cookies.
+BROWSER_HEADERS = {
+    "User-Agent": config.USER_AGENT,
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+    "Accept-Language": "en-US,en;q=0.9,ko;q=0.8",
+    "Connection": "keep-alive",
+    "Upgrade-Insecure-Requests": "1",
+    "Sec-Fetch-Dest": "document",
+    "Sec-Fetch-Mode": "navigate",
+    "Sec-Fetch-Site": "none",
+    "Sec-Fetch-User": "?1",
+}
+
+_session: Optional[requests.Session] = None
+
+
+def _new_session() -> requests.Session:
+    session = requests.Session()
+    session.headers.update(BROWSER_HEADERS)
+    # Fail fast instead of chasing the loop 30 times per attempt
+    session.max_redirects = 10
+    return session
+
+
 def _fetch(url: str) -> str:
-    """Fetch URL with retries."""
-    headers = {"User-Agent": config.USER_AGENT}
+    """Fetch URL with retries, keeping cookies across requests."""
+    global _session
+    last_error = None
     for attempt in range(1, config.MAX_RETRIES + 1):
+        if _session is None:
+            _session = _new_session()
         try:
-            resp = requests.get(url, headers=headers, timeout=30)
+            resp = _session.get(url, timeout=30)
             resp.raise_for_status()
             return resp.text
+        except requests.TooManyRedirects as e:
+            # Akamai redirect loop: cookie state is poisoned, start clean
+            logger.warning(
+                f"Attempt {attempt}/{config.MAX_RETRIES} hit a redirect loop for {url}, "
+                f"resetting session: {e}"
+            )
+            _session = None
+            last_error = e
         except requests.RequestException as e:
             logger.warning(f"Attempt {attempt}/{config.MAX_RETRIES} failed for {url}: {e}")
-            if attempt < config.MAX_RETRIES:
-                time.sleep(config.RETRY_DELAY * attempt)
-            else:
-                raise
+            last_error = e
+        if attempt < config.MAX_RETRIES:
+            time.sleep(config.RETRY_DELAY * attempt)
+    raise last_error
 
 
 def _normalize(text: str) -> str:

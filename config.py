@@ -26,5 +26,5 @@ STATE_FILE = os.path.join(DATA_DIR, "bulletin_state.json")
 BASE_URL = "https://travel.state.gov"
 BULLETIN_INDEX_URL = f"{BASE_URL}/content/travel/en/legal/visa-law0/visa-bulletin.html"
 USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-MAX_RETRIES = 3
-RETRY_DELAY = 3  # seconds
+MAX_RETRIES = int(os.environ.get("SCRAPE_MAX_RETRIES", "4"))
+RETRY_DELAY = int(os.environ.get("SCRAPE_RETRY_DELAY", "5"))  # seconds, multiplied by attempt number
