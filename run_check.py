@@ -10,7 +10,13 @@ import sys
 
 from scraper import scrape_bulletin
 from calculator import calculate_changes, estimate_arrival
-from state_manager import is_new_bulletin, update_state, load_state
+from state_manager import (
+    is_new_bulletin,
+    update_state,
+    load_state,
+    record_failure,
+    clear_failures,
+)
 from notifier import format_bulletin_message, send_telegram, send_error_notification
 
 logging.basicConfig(
@@ -57,8 +63,15 @@ if __name__ == "__main__":
     try:
         result = run_check(force=force)
         logger.info(f"Result: {result}")
+        clear_failures()
         sys.exit(0)
     except Exception as e:
         logger.error(f"Check failed: {e}", exc_info=True)
-        send_error_notification(str(e))
+        # 사이트 봇 차단은 대부분 하루 안에 풀리므로 첫 실패는 조용히 넘기고,
+        # 2일 연속 실패부터 텔레그램으로 알린다.
+        failures = record_failure()
+        if failures >= 2:
+            send_error_notification(f"{e} ({failures}회 연속 실패)")
+        else:
+            logger.warning("First consecutive failure, suppressing Telegram alert")
         sys.exit(1)

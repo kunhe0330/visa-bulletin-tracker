@@ -39,9 +39,13 @@ def parse_bulletin_date(date_str: str) -> Optional[datetime]:
     return datetime(year, month, day).date()
 
 
-# travel.state.gov sits behind Akamai bot protection. Requests from datacenter
-# IPs with bare python-requests headers can get bounced in an endless redirect
-# loop ("exceeded 30 redirects"), so we mimic a real browser and keep cookies.
+# travel.state.gov sits behind aggressive bot protection (Akamai redirect
+# loops, then Cloudflare 403s) that fingerprints the TLS handshake itself, so
+# plain python-requests gets blocked regardless of headers. Fetch strategy:
+#   1. curl_cffi impersonating a real Chrome TLS fingerprint (if installed)
+#   2. plain requests with browser-like headers (works when protection is lax)
+#   3. Wayback Machine snapshot — bulletins are static once published, so a
+#      slightly stale archive copy is an acceptable last resort
 BROWSER_HEADERS = {
     "User-Agent": config.USER_AGENT,
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
@@ -54,39 +58,94 @@ BROWSER_HEADERS = {
     "Sec-Fetch-User": "?1",
 }
 
+try:
+    from curl_cffi import requests as curl_requests
+except ImportError:
+    curl_requests = None
+
 _session: Optional[requests.Session] = None
+_curl_session = None
 
 
 def _new_session() -> requests.Session:
     session = requests.Session()
     session.headers.update(BROWSER_HEADERS)
-    # Fail fast instead of chasing the loop 30 times per attempt
+    # Fail fast instead of chasing a redirect loop 30 times per attempt
     session.max_redirects = 10
     return session
 
 
-def _fetch(url: str) -> str:
-    """Fetch URL with retries, keeping cookies across requests."""
+def _fetch_via_browser_tls(url: str) -> str:
+    """Fetch with curl_cffi impersonating Chrome's TLS fingerprint."""
+    global _curl_session
+    if curl_requests is None:
+        raise RuntimeError("curl_cffi not installed")
+    try:
+        if _curl_session is None:
+            _curl_session = curl_requests.Session(impersonate="chrome")
+        resp = _curl_session.get(url, timeout=30)
+        resp.raise_for_status()
+        return resp.text
+    except Exception:
+        _curl_session = None  # cookie state may be poisoned, start clean next time
+        raise
+
+
+def _fetch_via_requests(url: str) -> str:
+    """Fetch with plain requests, keeping cookies across requests."""
     global _session
-    last_error = None
-    for attempt in range(1, config.MAX_RETRIES + 1):
+    try:
         if _session is None:
             _session = _new_session()
-        try:
-            resp = _session.get(url, timeout=30)
-            resp.raise_for_status()
-            return resp.text
-        except requests.TooManyRedirects as e:
-            # Akamai redirect loop: cookie state is poisoned, start clean
-            logger.warning(
-                f"Attempt {attempt}/{config.MAX_RETRIES} hit a redirect loop for {url}, "
-                f"resetting session: {e}"
-            )
-            _session = None
-            last_error = e
-        except requests.RequestException as e:
-            logger.warning(f"Attempt {attempt}/{config.MAX_RETRIES} failed for {url}: {e}")
-            last_error = e
+        resp = _session.get(url, timeout=30)
+        resp.raise_for_status()
+        return resp.text
+    except Exception:
+        _session = None
+        raise
+
+
+def _fetch_via_wayback(url: str) -> str:
+    """Fetch the most recent Wayback Machine snapshot of the page.
+
+    Requesting /web/<future-timestamp>id_/<url> redirects to the newest
+    capture; the 'id_' flag returns the original HTML without archive.org's
+    link rewriting, so the normal parsing code works unchanged.
+    """
+    snap_url = f"https://web.archive.org/web/20991231id_/{url}"
+    resp = requests.get(
+        snap_url,
+        headers={"User-Agent": "visa-bulletin-tracker/1.0 (personal daily check)"},
+        timeout=90,
+    )
+    resp.raise_for_status()
+    logger.info(f"Using Wayback snapshot: {resp.url}")
+    return resp.text
+
+
+def _fetch(url: str) -> str:
+    """Fetch URL, trying each strategy in order with retries."""
+    strategies = [
+        ("browser-tls", _fetch_via_browser_tls),
+        ("requests", _fetch_via_requests),
+        ("wayback", _fetch_via_wayback),
+    ]
+    if curl_requests is None:
+        strategies.pop(0)
+
+    last_error = None
+    for attempt in range(1, config.MAX_RETRIES + 1):
+        for name, fetcher in strategies:
+            try:
+                html = fetcher(url)
+                if name != strategies[0][0] or attempt > 1:
+                    logger.info(f"Fetched {url} via '{name}' on attempt {attempt}")
+                return html
+            except Exception as e:
+                logger.warning(
+                    f"[{name}] attempt {attempt}/{config.MAX_RETRIES} failed for {url}: {e}"
+                )
+                last_error = e
         if attempt < config.MAX_RETRIES:
             time.sleep(config.RETRY_DELAY * attempt)
     raise last_error

@@ -92,6 +92,23 @@ def update_state(bulletin_data: dict) -> tuple[dict, Optional[dict]]:
     return state, previous_entry
 
 
+def record_failure() -> int:
+    """Increment and persist the consecutive-failure counter. Returns new count."""
+    state = load_state()
+    count = state.get("consecutive_failures", 0) + 1
+    state["consecutive_failures"] = count
+    save_state(state)
+    return count
+
+
+def clear_failures():
+    """Reset the consecutive-failure counter after a successful check."""
+    state = load_state()
+    if state.get("consecutive_failures"):
+        state["consecutive_failures"] = 0
+        save_state(state)
+
+
 def is_new_bulletin(bulletin_month: str) -> bool:
     """Check if this bulletin month is new (not yet processed)."""
     state = load_state()
