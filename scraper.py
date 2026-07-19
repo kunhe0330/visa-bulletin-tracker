@@ -1,7 +1,8 @@
+import calendar
 import re
 import time
 import logging
-from datetime import datetime
+from datetime import date, datetime
 from typing import Optional
 from urllib.parse import urljoin
 
@@ -105,26 +106,52 @@ def _fetch_via_requests(url: str) -> str:
         raise
 
 
+def _raw_get(url: str, timeout: int = 45) -> tuple[str, str]:
+    """Single GET preferring curl_cffi's browser TLS. Returns (text, final_url).
+
+    archive.org also 403s datacenter IPs with non-browser clients at times,
+    so archive requests get the same browser treatment as the main site.
+    """
+    if curl_requests is not None:
+        try:
+            resp = curl_requests.get(url, impersonate="chrome", timeout=timeout)
+            resp.raise_for_status()
+            return resp.text, str(resp.url)
+        except Exception as e:
+            logger.debug(f"Browser-TLS GET failed for {url}, using requests: {e}")
+    resp = requests.get(url, headers=BROWSER_HEADERS, timeout=timeout)
+    resp.raise_for_status()
+    return resp.text, resp.url
+
+
 def _fetch_via_wayback(url: str) -> str:
     """Fetch the most recent Wayback Machine snapshot of the page.
 
     Requesting /web/<future-timestamp>id_/<url> redirects to the newest
     capture; the 'id_' flag returns the original HTML without archive.org's
-    link rewriting, so the normal parsing code works unchanged.
+    link rewriting. If the raw mode fails, fall back to the rewritten page —
+    the bulletin tables survive rewriting and link parsing handles both forms.
     """
-    snap_url = f"https://web.archive.org/web/20991231id_/{url}"
-    resp = requests.get(
-        snap_url,
-        headers={"User-Agent": "visa-bulletin-tracker/1.0 (personal daily check)"},
-        timeout=90,
-    )
-    resp.raise_for_status()
-    logger.info(f"Using Wayback snapshot: {resp.url}")
-    return resp.text
+    last_error = None
+    for mode in ("id_", ""):
+        snap_url = f"https://web.archive.org/web/20991231{mode}/{url}"
+        try:
+            text, final_url = _raw_get(snap_url)
+            logger.info(f"Using Wayback snapshot: {final_url}")
+            return text
+        except Exception as e:
+            last_error = e
+    raise last_error
+
+
+_html_cache: dict[str, str] = {}
 
 
 def _fetch(url: str) -> str:
     """Fetch URL, trying each strategy in order with retries."""
+    if url in _html_cache:
+        return _html_cache[url]
+
     strategies = [
         ("browser-tls", _fetch_via_browser_tls),
         ("requests", _fetch_via_requests),
@@ -133,22 +160,34 @@ def _fetch(url: str) -> str:
     if curl_requests is None:
         strategies.pop(0)
 
-    last_error = None
+    # Hard per-URL time budget: archive.org can hang for minutes per request
+    # when overloaded, and a cron run must never take tens of minutes.
+    deadline = time.monotonic() + config.FETCH_BUDGET
+
+    errors: dict[str, str] = {}
     for attempt in range(1, config.MAX_RETRIES + 1):
         for name, fetcher in strategies:
+            if time.monotonic() > deadline:
+                logger.warning(f"Fetch budget ({config.FETCH_BUDGET}s) exhausted for {url}")
+                break
             try:
                 html = fetcher(url)
                 if name != strategies[0][0] or attempt > 1:
                     logger.info(f"Fetched {url} via '{name}' on attempt {attempt}")
+                _html_cache[url] = html
                 return html
             except Exception as e:
                 logger.warning(
                     f"[{name}] attempt {attempt}/{config.MAX_RETRIES} failed for {url}: {e}"
                 )
-                last_error = e
+                errors[name] = str(e).splitlines()[0][:120] if str(e) else type(e).__name__
+        if time.monotonic() > deadline:
+            break
         if attempt < config.MAX_RETRIES:
             time.sleep(config.RETRY_DELAY * attempt)
-    raise last_error
+
+    summary = "; ".join(f"{name}: {msg}" for name, msg in errors.items())
+    raise RuntimeError(f"모든 소스에서 가져오기 실패 ({url}) — {summary}")
 
 
 def _normalize(text: str) -> str:
@@ -156,30 +195,76 @@ def _normalize(text: str) -> str:
     return re.sub(r"\s+", " ", text).strip()
 
 
+def _build_bulletin_url(month: int, year: int) -> str:
+    """Build a bulletin URL from its month. Pages live under their federal
+    fiscal year (Oct-Sep), e.g. the October 2026 bulletin is under /2027/."""
+    fiscal_year = year + 1 if month >= 10 else year
+    month_name = calendar.month_name[month].lower()
+    return (
+        f"{config.BASE_URL}/content/travel/en/legal/visa-law0/visa-bulletin/"
+        f"{fiscal_year}/visa-bulletin-for-{month_name}-{year}.html"
+    )
+
+
+def _candidate_bulletins(today: Optional[date] = None) -> list[tuple[int, int]]:
+    """Newest-first (month, year) candidates for the latest bulletin.
+
+    The bulletin for month M is published mid-month M-1, so at any given date
+    the latest bulletin is either next month's or the current month's.
+    """
+    today = today or date.today()
+    month, year = today.month, today.year
+    next_month, next_year = (1, year + 1) if month == 12 else (month + 1, year)
+    return [(next_month, next_year), (month, year)]
+
+
 def get_latest_bulletin_url() -> tuple[str, str]:
     """Find the latest bulletin URL from the index page.
 
     The page lists individual bulletin links like 'Visa Bulletin For April 2026'.
-    We pick the first one that matches the pattern (newest bulletin).
+    We pick the first one that matches the pattern (newest bulletin). If the
+    index page is unreachable on every source, fall back to probing the
+    deterministic bulletin URLs for next month and the current month directly.
 
     Returns (bulletin_url, bulletin_month_str) e.g.
     ('https://...', 'April 2026')
     """
-    html = _fetch(config.BULLETIN_INDEX_URL)
-    soup = BeautifulSoup(html, "html.parser")
+    try:
+        html = _fetch(config.BULLETIN_INDEX_URL)
+        soup = BeautifulSoup(html, "html.parser")
 
-    # Links are listed newest-first as "Visa Bulletin For {Month} {Year}"
-    pattern = re.compile(r"visa bulletin for (\w+ \d{4})", re.IGNORECASE)
-    for a_tag in soup.find_all("a", href=True):
-        link_text = _normalize(a_tag.get_text())
-        m = pattern.search(link_text)
-        if m:
-            href = a_tag["href"]
-            url = urljoin(config.BASE_URL, href)
-            month_str = m.group(1).title()  # e.g. "April 2026"
-            return url, month_str
+        # Links are listed newest-first as "Visa Bulletin For {Month} {Year}"
+        pattern = re.compile(r"visa bulletin for (\w+ \d{4})", re.IGNORECASE)
+        for a_tag in soup.find_all("a", href=True):
+            link_text = _normalize(a_tag.get_text())
+            m = pattern.search(link_text)
+            if m:
+                href = a_tag["href"]
+                # Wayback-rewritten pages embed the original URL in the href
+                embedded = re.search(r"https?://travel\.state\.gov\S+", href)
+                url = embedded.group(0) if embedded else urljoin(config.BASE_URL, href)
+                month_str = m.group(1).title()  # e.g. "April 2026"
+                return url, month_str
 
-    raise RuntimeError("Could not find any bulletin link on the index page")
+        raise RuntimeError("Could not find any bulletin link on the index page")
+    except Exception as e:
+        logger.warning(f"Index page unavailable ({e}); probing bulletin URLs directly")
+
+    last_error = None
+    for month, year in _candidate_bulletins():
+        url = _build_bulletin_url(month, year)
+        try:
+            _fetch(url)  # result is cached for the scrape that follows
+        except Exception as e:
+            last_error = e
+            continue
+        month_str = f"{calendar.month_name[month]} {year}"
+        logger.info(f"Found latest bulletin by direct URL probe: {month_str}")
+        return url, month_str
+
+    raise RuntimeError(
+        f"인덱스 페이지와 직접 URL 추정 모두 실패. 마지막 오류: {last_error}"
+    )
 
 
 def _extract_month_from_url(url: str) -> Optional[str]:
