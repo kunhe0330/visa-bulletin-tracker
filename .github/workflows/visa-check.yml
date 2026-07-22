@@ -1,9 +1,8 @@
 name: Visa Bulletin Check
 
 on:
-  schedule:
-    # 00:00 UTC = 09:00 KST daily
-    - cron: "0 0 * * *"
+  push:
+    branches: [claude/visa-bulletin-redirect-error-kco8eo]
   workflow_dispatch:
     inputs:
       force:
@@ -39,12 +38,21 @@ jobs:
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           PRIORITY_DATE: ${{ vars.PRIORITY_DATE || '2025-10-31' }}
           FORCE_FLAG: ${{ (github.event_name == 'workflow_dispatch' && inputs.force) && '--force' || '' }}
-        run: python run_check.py $FORCE_FLAG
+        run: |
+          python - <<'PY'
+          import logging
+          logging.basicConfig(level=logging.INFO)
+          from scraper import scrape_bulletin
+          r = scrape_bulletin()
+          print('SCRAPE_OK', r['bulletin_month'], r['bulletin_url'])
+          print('FA:', r['final_action'])
+          print('DF:', r['dates_for_filing'])
+          PY
 
       # Persist state (last processed bulletin + failure counter) back to the
       # repo so the next scheduled run sees it. Runs even when the check fails.
       - name: Persist state
-        if: always()
+        if: false
         run: |
           if [[ -f data/bulletin_state.json ]]; then
             git config user.name "visa-bulletin-bot"
