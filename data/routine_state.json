@@ -1,13 +1,72 @@
 {
   "last_bulletin_month": "August 2026",
-  "eb3_worldwide": {
-    "final_action": "2024-09-01",
-    "dates_for_filing": "C"
-  },
-  "uscis_chart": "Final Action (Chart A)",
-  "sources": [
-    "https://wolfsdorf.com/august-2026-visa-bulletin-what-employers-professionals-and-eb-5-investors-need-to-know/",
-    "https://eiglaw.com/august-2026-visa-bulletin-released/"
+  "priority_date": "2025-10-31",
+  "history_newest_first": [
+    {
+      "bulletin_month": "August 2026",
+      "final_action": {
+        "eb3_professionals": "2024-09-01"
+      },
+      "dates_for_filing": {
+        "eb3_professionals": "C"
+      }
+    },
+    {
+      "bulletin_month": "July 2026",
+      "final_action": {
+        "eb3_professionals": "2024-08-01"
+      },
+      "dates_for_filing": {
+        "eb3_professionals": "C"
+      }
+    },
+    {
+      "bulletin_month": "June 2026",
+      "final_action": {
+        "eb3_professionals": "2024-06-01"
+      },
+      "dates_for_filing": {
+        "eb3_professionals": "C"
+      }
+    },
+    {
+      "bulletin_month": "May 2026",
+      "final_action": {
+        "eb3_professionals": "2024-06-01"
+      },
+      "dates_for_filing": {
+        "eb3_professionals": "C"
+      }
+    },
+    {
+      "bulletin_month": "April 2026",
+      "final_action": {
+        "eb3_professionals": "2024-06-01"
+      },
+      "dates_for_filing": {
+        "eb3_professionals": "C"
+      }
+    },
+    {
+      "bulletin_month": "March 2026",
+      "final_action": {
+        "eb3_professionals": "2023-10-01"
+      },
+      "dates_for_filing": {
+        "eb3_professionals": "2024-01-15"
+      }
+    },
+    {
+      "bulletin_month": "February 2026",
+      "final_action": {
+        "eb3_professionals": "2023-06-01"
+      },
+      "dates_for_filing": {
+        "eb3_professionals": "2023-10-01"
+      }
+    }
   ],
-  "checked_at": "2026-07-22T02:00:00+00:00"
+  "uscis_chart": "Final Action (Chart A)",
+  "checked_at": "2026-07-22T02:30:00+00:00",
+  "note": "history는 EB-3 All Chargeability(Worldwide) 기준. Feb-Jun은 Wayback 스냅샷, Jul-Aug는 로펌 요약 교차검증으로 확보."
 }
