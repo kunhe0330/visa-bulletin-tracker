@@ -1,0 +1,58 @@
+name: Visa Bulletin Check
+
+on:
+  schedule:
+    # 00:00 UTC = 09:00 KST daily
+    - cron: "0 0 * * *"
+  workflow_dispatch:
+    inputs:
+      force:
+        description: "현재 bulletin 알림을 강제로 다시 발송"
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: visa-check
+  cancel-in-progress: false
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run bulletin check
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          PRIORITY_DATE: ${{ vars.PRIORITY_DATE || '2025-10-31' }}
+          FORCE_FLAG: ${{ (github.event_name == 'workflow_dispatch' && inputs.force) && '--force' || '' }}
+        run: python run_check.py $FORCE_FLAG
+
+      # Persist state (last processed bulletin + failure counter) back to the
+      # repo so the next scheduled run sees it. Runs even when the check fails.
+      - name: Persist state
+        if: always()
+        run: |
+          if [[ -f data/bulletin_state.json ]]; then
+            git config user.name "visa-bulletin-bot"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add -f data/bulletin_state.json
+            if ! git diff --cached --quiet; then
+              git commit -m "Update bulletin state [skip ci]"
+              git pull --rebase origin ${{ github.ref_name }}
+              git push
+            fi
+          fi
